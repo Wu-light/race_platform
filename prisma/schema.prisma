@@ -1,0 +1,338 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ========== 核心实体 ==========
+
+model User {
+  id              String   @id @default(cuid())
+  githubId        Int      @unique
+  name            String?
+  email           String?
+  avatar          String?
+  bio             String?
+  school          String?
+  company         String?
+  roles           String   @default("[]") // JSON array of Role strings: ["rider","judge","organizer","admin"]
+  profileCompleted Boolean @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  organizedRaces     Race[]
+  registrations      Registration[]
+  judgeAssignments   JudgeAssignment[]
+  judgeAssignmentsCreated JudgeAssignment[] @relation("AssignedBy")
+  accounts           Account[]
+  sessions           Session[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model Race {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  subtitle    String?
+  description String   // markdown
+  challenge   String   // markdown - 赛题说明
+  rules       String   @default("") // markdown - 参赛规则
+  schedule    String   @default("{}") // JSON: { registrationStart, registrationEnd, raceStart, raceEnd, submissionDeadline, judgingEnd }
+  status      String   @default("draft") // draft | published | registration | running | submitting | judging | completed | archived
+  visibility  String   @default("hidden") // public | hidden | internal
+  awardSettings        String   @default("[]") // JSON array of award names
+  submissionRequirements String @default("{}") // JSON: { fields, format, description }
+  organizerId String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  organizer     User            @relation(fields: [organizerId], references: [id])
+  registrations Registration[]
+  awards        Award[]
+  reports       Report[]
+  projections   Projection[]
+  announcements Announcement[]
+
+  @@map("races")
+}
+
+model Registration {
+  id          String   @id @default(cuid())
+  userId      String
+  raceId      String
+  status      String   @default("submitted") // submitted | approved | rejected | withdrawn
+  submittedAt DateTime @default(now())
+  approvedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  user       User         @relation(fields: [userId], references: [id])
+  race       Race         @relation(fields: [raceId], references: [id])
+  raceProject RaceProject?
+  work       Work?
+  awards     Award[]
+  evidence   Evidence[]
+  reports    Report[]     @relation("SubjectRegistration")
+
+  @@unique([userId, raceId])
+  @@map("registrations")
+}
+
+model RaceProject {
+  id                      String   @id @default(cuid())
+  registrationId          String   @unique
+  githubRepoUrl           String?
+  aggregateIngestionStatus String  @default("not_configured") // not_configured | connected | active | failed
+  connectionHealth        String   @default("{}") // JSON summary
+  lastSyncedAt            DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  // Relations
+  registration Registration  @relation(fields: [registrationId], references: [id])
+  caConnections CAConnection[]
+
+  @@map("race_projects")
+}
+
+model CAConnection {
+  id                 String   @id @default(cuid())
+  raceProjectId      String
+  caType             String   @default("other") // claude_code | codex | other
+  ingestionSource    String   @default("ca_realtime")
+  connectorId        String?
+  connectorVersion   String?
+  externalProjectRef String?
+  ingestionStatus    String   @default("not_configured") // not_configured | connected | active | failed
+  registeredAt       DateTime @default(now())
+  handshakeAt        DateTime?
+  disabledAt         DateTime?
+  lastSyncedAt       DateTime?
+  createdAt          DateTime @default(now())
+
+  // Relations
+  raceProject   RaceProject     @relation(fields: [raceProjectId], references: [id])
+  caSessions    CASession[]
+  ridingMetrics RidingMetrics[]
+
+  @@map("ca_connections")
+}
+
+model CASession {
+  id             String   @id @default(cuid())
+  caConnectionId String
+  summary        String   @default("{}") // JSON: SessionSummary
+  startedAt      DateTime
+  endedAt        DateTime?
+  messageCount   Int      @default(0)
+  toolCallCount  Int      @default(0)
+  tokenCost      Float    @default(0)
+  createdAt      DateTime @default(now())
+
+  // Relations
+  caConnection CAConnection @relation(fields: [caConnectionId], references: [id])
+
+  @@map("ca_sessions")
+}
+
+model RidingMetrics {
+  id             String   @id @default(cuid())
+  caConnectionId String   @unique
+  costSummary    String   @default("{}") // JSON
+  progressSummary String  @default("{}") // JSON
+  riskSummary    String   @default("{}") // JSON
+  skillSummary   String   @default("{}") // JSON
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  caConnection CAConnection @relation(fields: [caConnectionId], references: [id])
+
+  @@map("riding_metrics")
+}
+
+model Work {
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  registrationId  String   @unique
+  title           String
+  description     String   // markdown
+  demoUrl         String?
+  githubUrl       String?
+  videoUrl        String?
+  techDescription String?  // markdown
+  status          String   @default("draft") // draft | submitted | locked | hidden
+  visibility      String   @default("hidden") // public | hidden | internal
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  registration     Registration      @relation(fields: [registrationId], references: [id])
+  judgeAssignments JudgeAssignment[]
+  awards           Award[]
+
+  @@map("works")
+}
+
+model JudgeAssignment {
+  id             String   @id @default(cuid())
+  workId         String
+  judgeId        String
+  assignedByUserId String
+  assignedAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  // Relations
+  work          Work            @relation(fields: [workId], references: [id])
+  judge         User            @relation(fields: [judgeId], references: [id])
+  assignedBy    User            @relation("AssignedBy", fields: [assignedByUserId], references: [id])
+  judgingRecord JudgingRecord?
+
+  @@map("judge_assignments")
+}
+
+model JudgingRecord {
+  id           String   @id @default(cuid())
+  assignmentId String   @unique
+  scoreResult  Float?   // 作品结果评分 1-10
+  scoreRiding  Float?   // 骑行能力评分 1-10
+  comments     String?  // 评语
+  status       String   @default("draft") // draft | submitted
+  submittedAt  DateTime?
+  createdAt    DateTime @default(now())
+
+  // Relations
+  assignment JudgeAssignment @relation(fields: [assignmentId], references: [id])
+
+  @@map("judging_records")
+}
+
+model Award {
+  id             String   @id @default(cuid())
+  raceId         String
+  registrationId String
+  workId         String?
+  awardName      String   // 奖项名称: 总成绩榜, 最佳作品, 最佳Agent Rider, 最佳纠偏, 最佳成本控制, 最佳复盘
+  rank           Int      // 名次，同奖项内不重复
+  decisionReason String?  // 获奖理由
+  publishedAt    DateTime?
+  createdAt      DateTime @default(now())
+
+  // Relations
+  race         Race         @relation(fields: [raceId], references: [id])
+  registration Registration @relation(fields: [registrationId], references: [id])
+  work         Work?        @relation(fields: [workId], references: [id])
+
+  @@unique([raceId, awardName, rank])
+  @@unique([raceId, awardName, registrationId])
+  @@map("awards")
+}
+
+model Evidence {
+  id             String   @id @default(cuid())
+  registrationId String
+  type           String   // session_summary | work | commit_pr | screenshot | judge_comment | retrospective | video
+  title          String
+  summary        String?
+  sourceRef      String   @default("{}") // JSON: { url, commitSha, filePath, description }
+  visibility     String   @default("internal") // public | hidden | internal
+  createdAt      DateTime @default(now())
+
+  // Relations
+  registration Registration @relation(fields: [registrationId], references: [id])
+
+  @@map("evidence")
+}
+
+model Report {
+  id                   String   @id @default(cuid())
+  raceId               String
+  type                 String   // rider_report | race_report | review_summary
+  status               String   @default("draft") // draft | generated | reviewed | published
+  subjectRegistrationId String? // 仅 rider_report 时必填
+  content              String   @default("") // markdown
+  generatedAt          DateTime?
+  publishedAt          DateTime?
+  createdAt            DateTime @default(now())
+
+  // Relations
+  race              Race          @relation(fields: [raceId], references: [id])
+  subjectRegistration Registration? @relation("SubjectRegistration", fields: [subjectRegistrationId], references: [id])
+
+  @@map("reports")
+}
+
+model Projection {
+  id            String   @id @default(cuid())
+  raceId        String
+  type          String   // race_progress | registration_status | cost | risk | submission | judging | current_leaderboard | screen_feed
+  data          String   @default("{}") // JSON blob for projection data
+  lastRebuiltAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  // Relations
+  race Race @relation(fields: [raceId], references: [id])
+
+  @@map("projections")
+}
+
+model Announcement {
+  id          String   @id @default(cuid())
+  raceId      String
+  title       String
+  body        String   // markdown
+  visibility  String   @default("public")
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  // Relations
+  race Race @relation(fields: [raceId], references: [id])
+
+  @@map("announcements")
+}
